@@ -84,72 +84,47 @@
         setStage('scanning');
         setProgress(0);
         setError(null);
-        let usedProxy = false;
 
         const progressInterval = setInterval(() => {
           setProgress((prev) => (prev < 90 ? prev + Math.floor(Math.random() * 10) + 2 : prev));
         }, 300);
 
         try {
-          let text = '';
-          const targetUrl = 'https://r.jina.ai/' + url;
+          const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(url);
+          const response = await fetch(proxyUrl);
+          
+          if (!response.ok) throw new Error('Proxy fetch failed');
+          
+          const proxyData = await response.json();
+          const rawHtml = proxyData.contents;
 
-          try {
-            const response = await fetch(targetUrl, {
-              headers: {
-                'Accept': 'application/json',
-                'X-Return-Format': 'markdown'
-              }
-            });
-            
-            if (!response.ok) throw new Error('Direct fetch failed');
-            
-            const data = await response.json();
-            text = data.data?.content || data.content || data.text || ''; 
-            
-          } catch (directError) {
-            console.warn('Прямой доступ заблокирован (CORS/Network), переключаюсь на прокси...', directError);
-            usedProxy = true;
-            
-            const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(targetUrl);
-            const response = await fetch(proxyUrl);
-            
-            if (!response.ok) throw new Error('Proxy fetch failed');
-            
-            const proxyData = await response.json();
-            
-            try {
-              const jinaData = JSON.parse(proxyData.contents);
-              text = jinaData.data?.content || jinaData.content || jinaData.text || proxyData.contents;
-            } catch (parseError) {
-              text = proxyData.contents;
-            }
-          }
+          if (!rawHtml) throw new Error('Получен пустой контент');
 
-          if (!text || text.trim() === '') {
-            throw new Error('Получен пустой контент');
-          }
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(rawHtml, 'text/html');
 
-          setSiteContent(text);
+          const elementsToRemove = doc.querySelectorAll('script, style, svg, noscript');
+          elementsToRemove.forEach(el => el.remove());
+
+          let cleanText = doc.body ? doc.body.textContent : doc.textContent;
+          cleanText = cleanText.replace(/\s+/g, ' ').trim();
+
+          setSiteContent(cleanText);
           clearInterval(progressInterval);
           setProgress(100);
 
           setTimeout(() => {
             setStage('chat');
-            const welcomeMessage = usedProxy 
-              ? "**Использую защищенный канал связи для обхода блокировок...**\n\nКонтент успешно получен. О чем хотите узнать?"
-              : `Сайт успешно прочитан. Извлечено ${text.length} симв. Что вас интересует?`;
-            
             setMessages([
-              { sender: 'bot', text: welcomeMessage }
+              { sender: 'bot', text: `**Подключился напрямую к источнику. Анализирую сырые данные...**\n\nИзвлечено ${cleanText.length} симв. текста. Что ищем?` }
             ]);
           }, 800);
 
-        } catch (finalError) {
-          console.error("Критическая ошибка при сканировании:", finalError);
+        } catch (error) {
+          console.error("Ошибка при прямом сканировании:", error);
           clearInterval(progressInterval);
           setStage('input');
-          setError('Сайт заблокировал автоматический доступ. Попробуйте другой URL.');
+          setError('Не удалось загрузить сырые данные. Проверьте URL.');
         }
       };
 
@@ -167,7 +142,7 @@
               messages: [
                 { 
                   role: 'system', 
-                  content: `Ты эксперт-помощник. Отвечай на вопросы пользователя, опираясь строго на этот контекст с сайта:\n\n${siteContent.substring(0, 15000)}` 
+                  content: `Ты эксперт-помощник. Отвечай на вопросы пользователя, опираясь строго на этот сырой текст с сайта:\n\n${siteContent.substring(0, 40000)}` 
                 },
                 { role: 'user', content: userText }
               ]
