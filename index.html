@@ -37,7 +37,6 @@
       </style>
     );
 
-    // Улучшенный парсер Markdown для красивого отображения слепка
     const formatInline = (text) => {
       const parts = text.split(/(\*\*.*?\*\*)/g);
       return parts.map((part, i) => {
@@ -76,7 +75,7 @@
       const [siteContent, setSiteContent] = useState('');
       const [error, setError] = useState(null);
       const [isThinking, setIsThinking] = useState(false);
-      const [isGeneratingSummary, setIsGeneratingSummary] = useState(false); // Новый стейт для слепка
+      const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
 
       const [showSettings, setShowSettings] = useState(false);
       const [apiKey, setApiKey] = useState(() => localStorage.getItem('webmind_api_key') || '');
@@ -92,7 +91,6 @@
         localStorage.setItem('webmind_api_key', key);
       };
 
-      // Функция авто-генерации слепка
       const generateAutoSummary = async (text, currentUrl) => {
         setIsGeneratingSummary(true);
         try {
@@ -123,7 +121,6 @@
           if (data.error) throw new Error(data.error.message);
           
           const aiResponse = data.choices[0].message.content;
-          // Добавляем флаг isSummary: true для стилизации
           setMessages([{ sender: 'bot', text: aiResponse, isSummary: true }]);
         } catch (err) {
           setMessages([{ sender: 'bot', text: `**Ошибка генерации слепка:**\n${err.message}` }]);
@@ -143,20 +140,29 @@
         }, 300);
 
         try {
-          const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(url);
-          const response = await fetch(proxyUrl);
-          
-          if (!response.ok) throw new Error('Proxy fetch failed');
-          
-          const proxyData = await response.json();
-          const rawHtml = proxyData.contents;
+          let rawHtml = '';
+          const encodedUrl = encodeURIComponent(url);
 
-          if (!rawHtml) throw new Error('Получен пустой контент');
+          try {
+            // Попытка 1: Codetabs (возвращает сырой HTML, отлично работает с Wiki)
+            const response1 = await fetch('https://api.codetabs.com/v1/proxy?quest=' + encodedUrl);
+            if (!response1.ok) throw new Error('Codetabs proxy failed');
+            rawHtml = await response1.text();
+          } catch (err1) {
+            console.warn("Первый прокси не справился, пробуем AllOrigins...", err1);
+            // Попытка 2: AllOrigins (запасной вариант)
+            const response2 = await fetch('https://api.allorigins.win/get?url=' + encodedUrl);
+            if (!response2.ok) throw new Error('AllOrigins proxy failed');
+            const proxyData = await response2.json();
+            rawHtml = proxyData.contents;
+          }
+
+          if (!rawHtml || rawHtml.trim() === '') throw new Error('Получен пустой контент');
 
           const parser = new DOMParser();
           const doc = parser.parseFromString(rawHtml, 'text/html');
 
-          const elementsToRemove = doc.querySelectorAll('script, style, svg, noscript');
+          const elementsToRemove = doc.querySelectorAll('script, style, svg, noscript, iframe');
           elementsToRemove.forEach(el => el.remove());
 
           let cleanText = doc.body ? doc.body.textContent : doc.textContent;
@@ -178,7 +184,7 @@
           }, 800);
 
         } catch (error) {
-          console.error("Ошибка при прямом сканировании:", error);
+          console.error("Ошибка при сканировании:", error);
           clearInterval(progressInterval);
           setStage('input');
           setError('Не удалось загрузить сырые данные. Проверьте URL.');
@@ -195,7 +201,7 @@
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-              model: 'google/gemini-1.5-flash',
+              model: 'google/gemini-2.0-flash-001',
               messages: [
                 { 
                   role: 'system', 
@@ -327,7 +333,6 @@
             <div className="w-full max-w-4xl h-[80vh] bg-[#111827] border border-gray-800 rounded-xl flex flex-col shadow-2xl mt-8">
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 
-                {/* Анимация генерации слепка */}
                 {isGeneratingSummary && (
                   <div className="flex justify-start">
                     <div className="max-w-[80%] px-6 py-4 rounded-lg bg-[#00f0ff]/5 border border-[#00f0ff] shadow-[0_0_15px_rgba(0,240,255,0.2)] text-[#00f0ff] font-bold tracking-widest text-sm animate-pulse">
@@ -342,7 +347,7 @@
                       msg.sender === 'user' 
                         ? 'bg-gray-800 text-gray-100 border border-gray-700' 
                         : msg.isSummary 
-                          ? 'bg-[#00f0ff]/5 border-2 border-[#00f0ff] shadow-[0_0_20px_rgba(0,240,255,0.15)] text-[#e2e8f0]' // Стилизация слепка
+                          ? 'bg-[#00f0ff]/5 border-2 border-[#00f0ff] shadow-[0_0_20px_rgba(0,240,255,0.15)] text-[#e2e8f0]' 
                           : 'bg-[#00f0ff]/10 border border-[#00f0ff]/30 text-[#e2e8f0]'
                     }`}>
                       {formatMarkdown(msg.text)}
@@ -350,7 +355,6 @@
                   </div>
                 ))}
                 
-                {/* Анимация ожидания ответа */}
                 {isThinking && (
                   <div className="flex justify-start">
                     <div className="max-w-[80%] px-5 py-3 rounded-lg text-sm bg-[#00f0ff]/5 border border-[#00f0ff]/20 text-[#00f0ff]">
