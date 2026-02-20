@@ -85,10 +85,10 @@
       return lower.includes('w.wiki/4wjs') || 
              lower.includes('just a moment...') || 
              (lower.includes('enable javascript') && lower.includes('cloudflare')) ||
-             lower.includes('attention required! | cloudflare');
+             lower.includes('attention required! | cloudflare') ||
+             lower.includes('please wait while your request is being verified');
     };
 
-    // Функция для понятного перевода ошибок API
     const parseApiError = (errMessage) => {
       if (errMessage.includes('User not found') || errMessage.includes('401')) {
         return 'Ваш API-ключ недействителен, заблокирован или удален. Пожалуйста, сгенерируйте новый ключ на OpenRouter и обновите его в настройках (⚙️).';
@@ -110,7 +110,7 @@
 
       const [showSettings, setShowSettings] = useState(false);
       
-      const defaultApiKey = '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';
+      const defaultApiKey = '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';
       const [apiKey, setApiKey] = useState(() => localStorage.getItem('webmind_api_key') || defaultApiKey);
 
       const messagesEndRef = useRef(null);
@@ -134,11 +134,11 @@
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-              model: 'google/gemini-2.0-flash-001',
+              model: 'google/gemma-2-9b-it:free',
               messages: [
                 { 
                   role: 'system', 
-                  content: `Ты — продвинутый ИИ-аналитик. Опирайся строго на этот текст:\n\n${text.substring(0, 40000)}` 
+                  content: `Ты — продвинутый ИИ-аналитик. Опирайся строго на этот текст:\n\n${text.substring(0, 15000)}` 
                 },
                 { 
                   role: 'user', 
@@ -180,7 +180,6 @@
           let cleanText = '';
           const isWikipedia = trimmedUrl.includes('wikipedia.org/wiki/');
 
-          // СПЕЦИАЛЬНЫЙ ОБХОД ДЛЯ ВИКИПЕДИИ
           if (isWikipedia) {
             try {
               const urlObj = new URL(trimmedUrl);
@@ -202,11 +201,9 @@
             }
           }
 
-          // КАСКАД ДЛЯ ОСТАЛЬНЫХ САЙТОВ (ИЛИ ЕСЛИ ВИКИ-АПИ ВЕРНУЛО ПУСТОТУ)
           if (!cleanText || cleanText.trim() === '') {
             const encodedUrl = encodeURIComponent(trimmedUrl);
             
-            // 1. Попытка Jina AI
             try {
               const response1 = await fetch('https://r.jina.ai/' + trimmedUrl, {
                 headers: { 'Accept': 'application/json', 'X-Return-Format': 'markdown' }
@@ -218,7 +215,6 @@
               }
             } catch (err) { console.warn("Jina failed"); }
 
-            // 2. Попытка AllOrigins Raw
             if (!cleanText) {
               try {
                 const response2 = await fetch('https://api.allorigins.win/raw?url=' + encodedUrl);
@@ -270,11 +266,11 @@
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-              model: 'google/gemini-2.0-flash-001',
+              model: 'google/gemma-2-9b-it:free',
               messages: [
                 { 
                   role: 'system', 
-                  content: `Ты эксперт-помощник. Отвечай на вопросы пользователя кратко и емко, опираясь строго на сырой текст сайта:\n\n${siteContent.substring(0, 40000)}` 
+                  content: `Ты эксперт-помощник. Отвечай на вопросы пользователя кратко и емко, опираясь строго на сырой текст сайта:\n\n${siteContent.substring(0, 15000)}` 
                 },
                 { role: 'user', content: userText }
               ]
