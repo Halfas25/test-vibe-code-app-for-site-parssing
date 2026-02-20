@@ -34,7 +34,7 @@
             80%, 100% { text-shadow: .25em 0 0 #00f0ff, .5em 0 0 #00f0ff; }
           }
 
-          /* Класс для карточки авто-конспекта */
+          /* Карточка авто-конспекта */
           .summary-card {
             background-color: rgba(0, 240, 255, 0.05);
             border: 2px solid #00f0ff;
@@ -79,15 +79,21 @@
       });
     };
 
-    // Функция-детектор для проверки, не заблокировал ли нас сайт
     const isBotBlocked = (text) => {
       if (!text) return true;
       const lower = text.toLowerCase();
       return lower.includes('w.wiki/4wjs') || 
              lower.includes('just a moment...') || 
              (lower.includes('enable javascript') && lower.includes('cloudflare')) ||
-             lower.includes('attention required! | cloudflare') ||
-             lower.includes('please wait while your request is being verified');
+             lower.includes('attention required! | cloudflare');
+    };
+
+    // Функция для понятного перевода ошибок API
+    const parseApiError = (errMessage) => {
+      if (errMessage.includes('User not found') || errMessage.includes('401')) {
+        return 'Ваш API-ключ недействителен, заблокирован или удален. Пожалуйста, сгенерируйте новый ключ на OpenRouter и обновите его в настройках (⚙️).';
+      }
+      return errMessage;
     };
 
     function App() {
@@ -104,8 +110,7 @@
 
       const [showSettings, setShowSettings] = useState(false);
       
-      // Дефолтный ключ интегрирован в стейт
-      const defaultApiKey = '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';
+      const defaultApiKey = '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';
       const [apiKey, setApiKey] = useState(() => localStorage.getItem('webmind_api_key') || defaultApiKey);
 
       const messagesEndRef = useRef(null);
@@ -149,14 +154,20 @@
           const aiResponse = data.choices[0].message.content;
           setMessages([{ sender: 'bot', text: aiResponse, isSummary: true }]);
         } catch (err) {
-          setMessages([{ sender: 'bot', text: `**Ошибка генерации слепка:**\n${err.message}` }]);
+          setMessages([{ sender: 'bot', text: `**Ошибка генерации слепка:**\n${parseApiError(err.message)}` }]);
         } finally {
           setIsGeneratingSummary(false);
         }
       };
 
       const startScanning = async () => {
-        if (!url.trim()) return;
+        const trimmedUrl = url.trim();
+        
+        if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
+          setError('Неверный формат. URL должен начинаться с http:// или https:// (API-ключ вводится в настройках ⚙️)');
+          return;
+        }
+
         setStage('scanning');
         setProgress(0);
         setError(null);
@@ -167,67 +178,62 @@
 
         try {
           let cleanText = '';
-          const encodedUrl = encodeURIComponent(url);
+          const isWikipedia = trimmedUrl.includes('wikipedia.org/wiki/');
 
-          // 1. Попытка Jina AI (прямой запрос, лучше всего для чтения статей)
-          try {
-            const response1 = await fetch('https://r.jina.ai/' + url, {
-              headers: { 'Accept': 'application/json', 'X-Return-Format': 'markdown' }
-            });
-            if (response1.ok) {
-              const data1 = await response1.json();
-              const text1 = data1.data?.content || data1.content || data1.text || '';
-              if (!isBotBlocked(text1)) cleanText = text1;
+          // СПЕЦИАЛЬНЫЙ ОБХОД ДЛЯ ВИКИПЕДИИ
+          if (isWikipedia) {
+            try {
+              const urlObj = new URL(trimmedUrl);
+              const title = urlObj.pathname.split('/wiki/')[1];
+              const domain = urlObj.hostname;
+              const wikiApiUrl = `https://${domain}/w/api.php?action=query&prop=extracts&explaintext=1&titles=${title}&format=json&origin=*`;
+              
+              const response = await fetch(wikiApiUrl);
+              if (response.ok) {
+                const data = await response.json();
+                const pages = data.query.pages;
+                const pageId = Object.keys(pages)[0];
+                if (pageId !== '-1' && pages[pageId].extract) {
+                  cleanText = pages[pageId].extract;
+                }
+              }
+            } catch (e) {
+              console.warn('Wikipedia API failed, using fallback...');
             }
-          } catch (err) { console.warn("Jina direct API call failed"); }
-
-          // 2. Попытка Jina AI через AllOrigins (обход жестких политик CORS браузера)
-          if (!cleanText) {
-            try {
-              const proxyJinaUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent('https://r.jina.ai/' + url);
-              const response2 = await fetch(proxyJinaUrl);
-              if (response2.ok) {
-                const proxyData = await response2.json();
-                let text2 = proxyData.contents;
-                try {
-                  const parsed = JSON.parse(text2);
-                  text2 = parsed.data?.content || parsed.content || parsed.text || text2;
-                } catch(e) {} // Если вернулся чистый текст, а не JSON
-                if (!isBotBlocked(text2)) cleanText = text2;
-              }
-            } catch (err) { console.warn("Jina via AllOrigins failed"); }
           }
 
-          // 3. Попытка Codetabs (классический прокси, парсинг HTML)
-          if (!cleanText) {
+          // КАСКАД ДЛЯ ОСТАЛЬНЫХ САЙТОВ (ИЛИ ЕСЛИ ВИКИ-АПИ ВЕРНУЛО ПУСТОТУ)
+          if (!cleanText || cleanText.trim() === '') {
+            const encodedUrl = encodeURIComponent(trimmedUrl);
+            
+            // 1. Попытка Jina AI
             try {
-              const codetabsUrl = 'https://api.codetabs.com/v1/proxy?quest=' + encodedUrl;
-              const response3 = await fetch(codetabsUrl);
-              if (response3.ok) {
-                const rawHtml = await response3.text();
-                const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
-                doc.querySelectorAll('script, style, svg, noscript, iframe, nav, footer').forEach(el => el.remove());
-                const text3 = (doc.body ? doc.body.textContent : doc.textContent).replace(/\s+/g, ' ').trim();
-                if (!isBotBlocked(text3)) cleanText = text3;
+              const response1 = await fetch('https://r.jina.ai/' + trimmedUrl, {
+                headers: { 'Accept': 'application/json', 'X-Return-Format': 'markdown' }
+              });
+              if (response1.ok) {
+                const data1 = await response1.json();
+                const text1 = data1.data?.content || data1.content || data1.text || '';
+                if (!isBotBlocked(text1)) cleanText = text1;
               }
-            } catch (err) { console.warn("Codetabs HTML proxy failed"); }
+            } catch (err) { console.warn("Jina failed"); }
+
+            // 2. Попытка AllOrigins Raw
+            if (!cleanText) {
+              try {
+                const response2 = await fetch('https://api.allorigins.win/raw?url=' + encodedUrl);
+                if (response2.ok) {
+                  const rawHtml = await response2.text();
+                  const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+                  doc.querySelectorAll('script, style, svg, noscript, iframe, nav, footer').forEach(el => el.remove());
+                  const text2 = (doc.body ? doc.body.textContent : doc.textContent).replace(/\s+/g, ' ').trim();
+                  if (!isBotBlocked(text2)) cleanText = text2;
+                }
+              } catch (err) { console.warn("AllOrigins Raw failed"); }
+            }
           }
 
-          // 4. Попытка AllOrigins напрямую (резервный парсинг HTML)
-          if (!cleanText) {
-            try {
-              const response4 = await fetch('https://api.allorigins.win/get?url=' + encodedUrl);
-              if (response4.ok) {
-                const proxyData = await response4.json();
-                const doc = new DOMParser().parseFromString(proxyData.contents, 'text/html');
-                doc.querySelectorAll('script, style, svg, noscript, iframe, nav, footer').forEach(el => el.remove());
-                const text4 = (doc.body ? doc.body.textContent : doc.textContent).replace(/\s+/g, ' ').trim();
-                if (!isBotBlocked(text4)) cleanText = text4;
-              }
-            } catch (err) { console.warn("AllOrigins direct HTML proxy failed"); }
-          }
-
-          if (!cleanText) {
+          if (!cleanText || cleanText.trim() === '') {
             throw new Error('Сайт заблокировал доступ (Anti-Bot) или вернул пустой результат.');
           }
 
@@ -247,7 +253,7 @@
           }, 800);
 
         } catch (error) {
-          console.error("Критическая ошибка при сканировании:", error);
+          console.error("Ошибка при сканировании:", error);
           clearInterval(progressInterval);
           setStage('input');
           setError('Не удалось обойти защиту сайта. Проверьте URL.');
@@ -281,7 +287,7 @@
           const aiResponse = data.choices[0].message.content;
           setMessages((prev) => [...prev, { sender: 'bot', text: aiResponse }]);
         } catch (err) {
-          setMessages((prev) => [...prev, { sender: 'bot', text: `**Ошибка API:**\n${err.message}` }]);
+          setMessages((prev) => [...prev, { sender: 'bot', text: `**Ошибка API:**\n${parseApiError(err.message)}` }]);
         } finally {
           setIsThinking(false);
         }
@@ -325,7 +331,6 @@
             </h1>
             
             <div className="flex items-center gap-4">
-              {/* Кнопка Очистить */}
               {stage !== 'input' && (
                 <button 
                   onClick={resetApp}
